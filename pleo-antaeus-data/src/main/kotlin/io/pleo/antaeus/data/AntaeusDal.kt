@@ -12,11 +12,7 @@ import io.pleo.antaeus.models.Customer
 import io.pleo.antaeus.models.Invoice
 import io.pleo.antaeus.models.InvoiceStatus
 import io.pleo.antaeus.models.Money
-import org.jetbrains.exposed.sql.Database
-import org.jetbrains.exposed.sql.insert
-import org.jetbrains.exposed.sql.select
-import org.jetbrains.exposed.sql.selectAll
-import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 
 class AntaeusDal(private val db: Database) {
@@ -40,9 +36,10 @@ class AntaeusDal(private val db: Database) {
     }
 
     /**
-     * Returns all invoices with matching status.
+     * Fetch all invoices with matching status.
      *
-     * @param status the status to be searched by
+     * @param status the status to be searched by.
+     * @return List of invoices.
      */
     fun fetchInvoicesWithStatus(status: InvoiceStatus): List<Invoice> {
         return transaction(db) {
@@ -50,7 +47,40 @@ class AntaeusDal(private val db: Database) {
                 .select { InvoiceTable.status.eq(status.name) }
                 .map { it.toInvoice() }
         }
+    }
 
+    /**
+     * Fetch all invoices with matching status and at least retry number.
+     *
+     * @param status the status to be searched by.
+     * @param minRetry at least retry number for invoice.
+     * @return List of invoices.
+     */
+    fun fetchInvoicesWithStatusAndRetry(status: InvoiceStatus, minRetry: Int): List<Invoice> {
+        return transaction(db) {
+            InvoiceTable
+                    .select { InvoiceTable.status.eq(status.name) and InvoiceTable.retry.greaterEq(minRetry) }
+                    .map { it.toInvoice() }
+        }
+    }
+
+    /**
+     * Increment retry number for invoice with matching id.
+     *
+     * @param id the id of the invoice.
+     */
+    fun incrementInvoiceRetry(id: Int) {
+        transaction(db) {
+            InvoiceTable.update (
+                where = { InvoiceTable.id.eq(id) },
+                body = {
+                    with(SqlExpressionBuilder) {
+                        it.update(InvoiceTable.retry, InvoiceTable.retry + 1)
+//                        it[InvoiceTable.retry] = InvoiceTable.retry + 1
+                    }
+                }
+            )
+        }
     }
 
     /**
@@ -68,7 +98,7 @@ class AntaeusDal(private val db: Database) {
         }
     }
 
-    fun createInvoice(amount: Money, customer: Customer, status: InvoiceStatus = InvoiceStatus.PENDING): Invoice? {
+    fun createInvoice(amount: Money, customer: Customer, status: InvoiceStatus = InvoiceStatus.PENDING, retry: Int = 0): Invoice? {
         val id = transaction(db) {
             // Insert the invoice and returns its new id.
             InvoiceTable
@@ -77,6 +107,7 @@ class AntaeusDal(private val db: Database) {
                     it[this.currency] = amount.currency.toString()
                     it[this.status] = status.toString()
                     it[this.customerId] = customer.id
+                    it[this.retry] = retry
                 } get InvoiceTable.id
         }
 

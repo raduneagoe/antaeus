@@ -22,6 +22,14 @@ class InvoiceService(private val dal: AntaeusDal) {
         return dal.fetchInvoicesWithStatus(status)
     }
 
+    fun fetch(status: InvoiceStatus, minRetry: Int): List<Invoice> {
+        return dal.fetchInvoicesWithStatusAndRetry(status, minRetry)
+    }
+
+    fun incrementRetry(id: Int) {
+        dal.incrementInvoiceRetry(id)
+    }
+
     fun updateStatus(id: Int, status: InvoiceStatus) {
         dal.updateInvoiceStatus(id, status)
     }
