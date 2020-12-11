@@ -19,6 +19,7 @@ open class BillingService(
         private val customerService: CustomerService,
         private val converterService: CurrencyConverterService,
         private val notificationService: NotificationService,
+        private val maxRetry: Int
 ) {
     private val logger = KotlinLogging.logger {}
 
@@ -26,23 +27,30 @@ open class BillingService(
         // TODO replace with https://github.com/shyiko/skedule library for more accurate time scheduling tasks
         Timer().scheduleAtFixedRate(timerTask {
             if (LocalDateTime.now().dayOfMonth == dayOfMonth) {
-                settleInvoices(getPendingInvoices())
+                settleInvoices(getPendingInvoices(), Int.MAX_VALUE)
             }
+
+            // Retry every day pending invoices with retry number between 1 and maxRetry
+            settleInvoices(getPendingInvoicesWithRetry(), maxRetry)
         }, 0, TimeUnit.DAYS.toMillis(1))
     }
 
-    protected fun settleInvoices(invoices: List<Invoice>) {
+    protected fun settleInvoices(invoices: List<Invoice>, maxRetry: Int) {
         for (invoice in invoices) {
-            settleInvoice(invoice)
+            settleInvoice(invoice, maxRetry)
         }
     }
 
-    protected fun settleInvoice(invoice: Invoice) {
+    protected fun settleInvoice(invoice: Invoice, maxRetry: Int) {
         if (invoice.status == InvoiceStatus.PAID) {
             logger.info {
                 String.format("Customer '%d' already charged for invoice '%d'", invoice.customerId, invoice.id)
             }
-
+            return
+        } else if (invoice.retry > maxRetry) {
+            logger.info {
+                String.format("Failed too many times to charge invoice '%d'", invoice.customerId, invoice.id)
+            }
             return
         }
 
@@ -77,7 +85,19 @@ open class BillingService(
         } catch (e: CurrencyMismatchException) {
             convertCurrencyForInvoiceAndTryAgain(invoice)
         } catch (e: NetworkException) {
-            // TODO add retry logic
+            logger.error {
+                String.format(
+                        "NetworkException: %s.\n"
+                        + "Remove subscription for customer '%d' and increase retry number for invoice '%d'",
+                        e.message,
+                        invoice.customerId,
+                        invoice.id
+                )
+            }
+
+            // Increment retry number so that invoice can be retried again by schedulePaymentOfPendingInvoices
+            invoiceService.incrementRetry(invoice.id)
+            customerService.updateHasSubscription(invoice.customerId, false)
         }
     }
 
@@ -120,5 +140,9 @@ open class BillingService(
 
     protected fun getPendingInvoices(): List<Invoice> {
         return invoiceService.fetch(InvoiceStatus.PENDING)
+    }
+
+    protected fun getPendingInvoicesWithRetry(): List<Invoice> {
+        return invoiceService.fetch(InvoiceStatus.PENDING, 1)
     }
 }

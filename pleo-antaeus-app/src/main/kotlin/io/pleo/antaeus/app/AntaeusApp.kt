@@ -66,7 +66,8 @@ fun main() {
         invoiceService = invoiceService,
         customerService = customerService,
         converterService = converterService,
-        notificationService = notificationService
+        notificationService = notificationService,
+        maxRetry = 3
     ).schedulePaymentOfPendingInvoices(dayOfMonth = 1)
 
     // Create REST web service
