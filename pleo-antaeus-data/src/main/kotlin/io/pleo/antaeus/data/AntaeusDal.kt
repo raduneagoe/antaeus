@@ -16,6 +16,7 @@ import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 
 class AntaeusDal(private val db: Database) {
@@ -35,6 +36,35 @@ class AntaeusDal(private val db: Database) {
             InvoiceTable
                 .selectAll()
                 .map { it.toInvoice() }
+        }
+    }
+
+    /**
+     * Returns all invoices with matching status.
+     *
+     * @param status the status to be searched by
+     */
+    fun fetchInvoicesWithStatus(status: InvoiceStatus): List<Invoice> {
+        return transaction(db) {
+            InvoiceTable
+                .select { InvoiceTable.status.eq(status.name) }
+                .map { it.toInvoice() }
+        }
+
+    }
+
+    /**
+     * Update status of invoice with matching id.
+     *
+     * @param id the id of the invoice.
+     * @param status the status to be set.
+     */
+    fun updateInvoiceStatus(id: Int, status: InvoiceStatus) {
+        transaction(db) {
+            InvoiceTable.update (
+                where = { InvoiceTable.id.eq(id) },
+                body = { it[InvoiceTable.status] = status.name }
+            )
         }
     }
 
