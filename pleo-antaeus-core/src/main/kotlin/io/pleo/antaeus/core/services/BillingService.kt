@@ -23,6 +23,13 @@ open class BillingService(
 ) {
     private val logger = KotlinLogging.logger {}
 
+    /**
+     * Schedule task to run every day. The task checks if it's the 1st of the month to settle all pending invoices.
+     * The task also checks every day if there are any pending invoices that failed in the past and retries again
+     * if they didn't reach max retry number.
+     *
+     * @param dayOfMonth
+     */
     fun schedulePaymentOfPendingInvoices(dayOfMonth: Int) {
         // TODO replace with https://github.com/shyiko/skedule library for more accurate time scheduling tasks
         Timer().scheduleAtFixedRate(timerTask {
@@ -30,10 +37,11 @@ open class BillingService(
                 settleInvoices(getPendingInvoices(), Int.MAX_VALUE)
             }
 
-            // Retry every day pending invoices with retry number between 1 and maxRetry
+            // Everyday retry pending invoices that have 1 <= retry <= maxRetry
             settleInvoices(getPendingInvoicesWithRetry(), maxRetry)
         }, 0, TimeUnit.DAYS.toMillis(1))
     }
+
 
     protected fun settleInvoices(invoices: List<Invoice>, maxRetry: Int) {
         for (invoice in invoices) {
@@ -41,6 +49,16 @@ open class BillingService(
         }
     }
 
+    /**
+     * Settle pending invoice with number of retries less than maxRetry.
+     * In case of a false response or a Exception from paymentProvider, remove customer subscription.
+     *
+     * NetworkException will increase the invoice retry number and the scheduleAtFixedRate running every day,
+     * will retry only the ones that have the retry number greater than 0.
+     *
+     * @param invoice
+     * @param maxRetry
+     */
     protected fun settleInvoice(invoice: Invoice, maxRetry: Int) {
         if (invoice.status == InvoiceStatus.PAID) {
             logger.info {
@@ -71,8 +89,12 @@ open class BillingService(
                     )
                 }
 
+                // Reset retry number because invoice can only be settled by the customer adding more funds to his account
+                // Nothing to do on backend side
+                invoiceService.resetRetry(invoice.id)
+                // Remove subscription
                 customerService.updateHasSubscription(invoice.customerId, false)
-
+                // Notify customer about error so that he can take action
                 notificationService.notifyCustomer(
                     id = invoice.customerId,
                     message = "Subscription suspended because of insufficient funds!"
@@ -83,30 +105,46 @@ open class BillingService(
                 String.format("Customer '%d' not found to pay invoice '%d'", invoice.customerId, invoice.id)
             }
         } catch (e: CurrencyMismatchException) {
-            convertCurrencyForInvoiceAndTryAgain(invoice)
+            convertCurrencyForInvoiceAndTryAgain(invoice, maxRetry)
         } catch (e: NetworkException) {
             logger.error {
                 String.format(
-                        "NetworkException: %s.\n"
-                        + "Remove subscription for customer '%d' and increase retry number for invoice '%d'",
-                        e.message,
-                        invoice.customerId,
-                        invoice.id
+                    "NetworkException: %s.\n"
+                    + "Remove subscription for customer '%d' and increase retry number for invoice '%d'",
+                    e.message,
+                    invoice.customerId,
+                    invoice.id
                 )
             }
 
             // Increment retry number so that invoice can be retried again by schedulePaymentOfPendingInvoices
             invoiceService.incrementRetry(invoice.id)
+            // Remove subscription
             customerService.updateHasSubscription(invoice.customerId, false)
+            // Notify customer about error so that he can take action
+            notificationService.notifyCustomer(
+                id = invoice.customerId,
+                message = "Subscription suspended because of internal server error! Will try again tomorrow."
+            )
         }
     }
 
-    private fun convertCurrencyForInvoiceAndTryAgain(invoice: Invoice) {
+    /**
+     * Convert invoice amount to customer currency and try again to Settle pending invoice calling settleInvoice().
+     *
+     * NetworkException will increase the invoice retry number and the scheduleAtFixedRate running every day,
+     * will retry only the ones that have the retry number greater than 0.
+     *
+     * @param invoice
+     * @param maxRetry
+     */
+    private fun convertCurrencyForInvoiceAndTryAgain(invoice: Invoice, maxRetry: Int) {
         try {
             logger.info {
                 String.format("Customer '%d' has different currency than invoice '%d'", invoice.customerId, invoice.id)
             }
 
+            // Convert amount to customer currency
             val customer = customerService.fetch(invoice.customerId)
             val convertedAmount = converterService.convertCurrency(
                 invoice.amount.value,
@@ -116,7 +154,7 @@ open class BillingService(
             val convertedInvoice = invoice.copy(amount = Money(convertedAmount, customer.currency))
 
             // Try again with new invoice containing converted amount
-            settleInvoice(convertedInvoice)
+            settleInvoice(convertedInvoice, maxRetry)
         } catch (e: NetworkException) {
             logger.error {
                 String.format(
@@ -126,8 +164,11 @@ open class BillingService(
                 )
             }
 
+            // Increment retry number so that invoice can be retried again by schedulePaymentOfPendingInvoices
+            invoiceService.incrementRetry(invoice.id)
+            // Remove subscription
             customerService.updateHasSubscription(invoice.customerId, false)
-
+            // Notify customer about error so that he can take action
             notificationService.notifyCustomer(
                 id = invoice.customerId,
                 message = String.format(

@@ -76,9 +76,22 @@ class AntaeusDal(private val db: Database) {
                 body = {
                     with(SqlExpressionBuilder) {
                         it.update(InvoiceTable.retry, InvoiceTable.retry + 1)
-//                        it[InvoiceTable.retry] = InvoiceTable.retry + 1
                     }
                 }
+            )
+        }
+    }
+
+    /**
+     * Put retry number to 0 for invoice with matching id.
+     *
+     * @param id the id of the invoice.
+     */
+    fun resetInvoiceRetry(id: Int) {
+        transaction(db) {
+            InvoiceTable.update (
+                where = { InvoiceTable.id.eq(id) },
+                body = { it[InvoiceTable.retry] = 0}
             )
         }
     }

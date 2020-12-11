@@ -30,6 +30,10 @@ class InvoiceService(private val dal: AntaeusDal) {
         dal.incrementInvoiceRetry(id)
     }
 
+    fun resetRetry(id: Int) {
+        dal.resetInvoiceRetry(id)
+    }
+
     fun updateStatus(id: Int, status: InvoiceStatus) {
         dal.updateInvoiceStatus(id, status)
     }
