@@ -111,4 +111,19 @@ class AntaeusDal(private val db: Database) {
 
         return fetchCustomer(id)
     }
+
+    /**
+     * Update subscription status of customer with matching id.
+     *
+     * @param id the id of the customer.
+     * @param hasSubscription true for valid subscription, false otherwise.
+     */
+    fun updateCustomerHasSubscription(id: Int, hasSubscription: Boolean) {
+        transaction(db) {
+            CustomerTable.update (
+                    where = { CustomerTable.id.eq(id) },
+                    body = { it[CustomerTable.hasSubscription] = hasSubscription }
+            )
+        }
+    }
 }
