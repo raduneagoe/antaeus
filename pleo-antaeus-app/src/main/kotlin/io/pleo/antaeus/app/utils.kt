@@ -12,7 +12,8 @@ import kotlin.random.Random
 internal fun setupInitialData(dal: AntaeusDal) {
     val customers = (1..100).mapNotNull {
         dal.createCustomer(
-            currency = Currency.values()[Random.nextInt(0, Currency.values().size)]
+            currency = Currency.values()[Random.nextInt(0, Currency.values().size)],
+            hasSubscription = true
         )
     }
 

@@ -100,11 +100,12 @@ class AntaeusDal(private val db: Database) {
         }
     }
 
-    fun createCustomer(currency: Currency): Customer? {
+    fun createCustomer(currency: Currency, hasSubscription: Boolean): Customer? {
         val id = transaction(db) {
             // Insert the customer and return its new id.
             CustomerTable.insert {
                 it[this.currency] = currency.toString()
+                it[this.hasSubscription] = hasSubscription
             } get CustomerTable.id
         }
 
