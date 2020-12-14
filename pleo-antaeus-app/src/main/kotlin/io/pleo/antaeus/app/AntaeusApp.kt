@@ -66,9 +66,8 @@ fun main() {
         invoiceService = invoiceService,
         customerService = customerService,
         converterService = converterService,
-        notificationService = notificationService,
-        maxRetry = 3
-    ).schedulePaymentOfPendingInvoices(dayOfMonth = 1)
+        notificationService = notificationService
+    ).schedulePaymentOfPendingInvoices(dayOfMonth = 1, maxRetry = 3)
 
     // Create REST web service
     AntaeusRest(

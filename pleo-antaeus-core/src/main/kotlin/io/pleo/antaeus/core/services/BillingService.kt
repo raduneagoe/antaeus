@@ -18,8 +18,7 @@ open class BillingService(
         private val invoiceService: InvoiceService,
         private val customerService: CustomerService,
         private val converterService: CurrencyConverterService,
-        private val notificationService: NotificationService,
-        private val maxRetry: Int
+        private val notificationService: NotificationService
 ) {
     private val logger = KotlinLogging.logger {}
 
@@ -30,7 +29,7 @@ open class BillingService(
      *
      * @param dayOfMonth
      */
-    fun schedulePaymentOfPendingInvoices(dayOfMonth: Int) {
+    fun schedulePaymentOfPendingInvoices(dayOfMonth: Int, maxRetry: Int) {
         // TODO replace with https://github.com/shyiko/skedule library for more accurate time scheduling tasks
         Timer().scheduleAtFixedRate(timerTask {
             if (LocalDateTime.now().dayOfMonth == dayOfMonth) {
@@ -43,7 +42,7 @@ open class BillingService(
     }
 
 
-    protected fun settleInvoices(invoices: List<Invoice>, maxRetry: Int) {
+    private fun settleInvoices(invoices: List<Invoice>, maxRetry: Int) {
         for (invoice in invoices) {
             settleInvoice(invoice, maxRetry)
         }
@@ -59,38 +58,26 @@ open class BillingService(
      * @param invoice
      * @param maxRetry
      */
-    protected fun settleInvoice(invoice: Invoice, maxRetry: Int) {
+    internal fun settleInvoice(invoice: Invoice, maxRetry: Int) {
         if (invoice.status == InvoiceStatus.PAID) {
-            logger.info {
-                String.format("Customer '%d' already charged for invoice '%d'", invoice.customerId, invoice.id)
-            }
+            logger.info { "Customer '${invoice.customerId}' already charged for invoice '${invoice.id}'" }
             return
         } else if (invoice.retry > maxRetry) {
-            logger.info {
-                String.format("Failed too many times to charge invoice '%d'", invoice.customerId, invoice.id)
-            }
+            logger.info { "Failed too many times to charge invoice '${invoice.id}'" }
             return
         }
 
         try {
             if (paymentProvider.charge(invoice)) {
-                logger.info {
-                    String.format("Customer '%d' successfully charged for invoice '%d'", invoice.customerId, invoice.id)
-                }
+                logger.info { "Customer '${invoice.customerId}' successfully charged for invoice '${invoice.id}'" }
 
                 invoiceService.updateStatus(invoice.id, InvoiceStatus.PAID)
                 customerService.updateHasSubscription(invoice.customerId, true)
             } else {
-                logger.info {
-                    String.format(
-                        "Customer '%d' has insufficient funds for invoice '%d'. Notify customer and remove subscription.",
-                        invoice.customerId,
-                        invoice.id
-                    )
-                }
+                logger.info { "Customer '${invoice.customerId}' has insufficient funds for invoice '${invoice.id}'." }
 
-                // Reset retry number because invoice can only be settled by the customer adding more funds to his account
-                // Nothing to do on backend side
+                // Invoice can only be settled by the customer adding more funds to his account
+                // Nothing to do on backend side so resetting retry number
                 invoiceService.resetRetry(invoice.id)
                 // Remove subscription
                 customerService.updateHasSubscription(invoice.customerId, false)
@@ -101,30 +88,23 @@ open class BillingService(
                 )
             }
         } catch (e: CustomerNotFoundException) {
-            logger.info {
-                String.format("Customer '%d' not found to pay invoice '%d'", invoice.customerId, invoice.id)
-            }
+            logger.info { "Customer '${invoice.customerId}' not found to pay invoice '${invoice.id}'"}
         } catch (e: CurrencyMismatchException) {
             convertCurrencyForInvoiceAndTryAgain(invoice, maxRetry)
         } catch (e: NetworkException) {
             logger.error {
-                String.format(
-                    "NetworkException: %s.\n"
-                    + "Remove subscription for customer '%d' and increase retry number for invoice '%d'",
-                    e.message,
-                    invoice.customerId,
-                    invoice.id
-                )
+                "NetworkException: ${e.message}. Removing subscription for customer '${invoice.customerId}' and " +
+                "increasing retry number for invoice '${invoice.id}'"
             }
 
-            // Increment retry number so that invoice can be retried again by schedulePaymentOfPendingInvoices
+            // Increment retry number so that invoice can be retried by schedulePaymentOfPendingInvoices
             invoiceService.incrementRetry(invoice.id)
             // Remove subscription
             customerService.updateHasSubscription(invoice.customerId, false)
             // Notify customer about error so that he can take action
             notificationService.notifyCustomer(
                 id = invoice.customerId,
-                message = "Subscription suspended because of internal server error! Will try again tomorrow."
+                message = "Subscription suspended because of internal server error! Automatic retry tomorrow."
             )
         }
     }
@@ -140,28 +120,19 @@ open class BillingService(
      */
     private fun convertCurrencyForInvoiceAndTryAgain(invoice: Invoice, maxRetry: Int) {
         try {
-            logger.info {
-                String.format("Customer '%d' has different currency than invoice '%d'", invoice.customerId, invoice.id)
-            }
+            logger.info { "Customer '${invoice.customerId}' has different currency than invoice '${invoice.id}'" }
 
             // Convert amount to customer currency
             val customer = customerService.fetch(invoice.customerId)
-            val convertedAmount = converterService.convertCurrency(
-                invoice.amount.value,
-                invoice.amount.currency,
-                customer.currency
-            )
+            val convertedAmount = converterService.convertCurrency(invoice.amount.value, invoice.amount.currency, customer.currency)
             val convertedInvoice = invoice.copy(amount = Money(convertedAmount, customer.currency))
 
             // Try again with new invoice containing converted amount
             settleInvoice(convertedInvoice, maxRetry)
         } catch (e: NetworkException) {
             logger.error {
-                String.format(
-                    "CurrencyConverterService error: %s.\nRemove subscription for customer '%d'",
-                    e.message,
-                    invoice.customerId
-                )
+                "CurrencyConverterService NetworkException: ${e.message}. " +
+                "Removing subscription for customer '${invoice.customerId}' and increasing retry number for invoice '${invoice.id}'"
             }
 
             // Increment retry number so that invoice can be retried again by schedulePaymentOfPendingInvoices
@@ -171,19 +142,17 @@ open class BillingService(
             // Notify customer about error so that he can take action
             notificationService.notifyCustomer(
                 id = invoice.customerId,
-                message = String.format(
-                    "Subscription suspended because of currency mismatch. Invoice currency is '%s'",
-                    invoice.amount.currency
-                )
+                message = "Subscription suspended because of currency mismatch. " +
+                          "Change currency to '${invoice.amount.currency}' or wait for automatic retry tomorrow."
             )
         }
     }
 
-    protected fun getPendingInvoices(): List<Invoice> {
+    private fun getPendingInvoices(): List<Invoice> {
         return invoiceService.fetch(InvoiceStatus.PENDING)
     }
 
-    protected fun getPendingInvoicesWithRetry(): List<Invoice> {
+    private fun getPendingInvoicesWithRetry(): List<Invoice> {
         return invoiceService.fetch(InvoiceStatus.PENDING, 1)
     }
 }
